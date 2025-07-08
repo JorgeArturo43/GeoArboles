@@ -1,4 +1,204 @@
-<!DOCTYPE html>
+<!D<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Geoárboles</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.3/dist/leaflet.css" />
+  <style>
+    #map { height: 500px; }
+    .leaflet-popup-content img { max-width: 100%; height: auto; }
+    #loginSection { max-width: 400px; margin: auto; padding-top: 50px; }
+  </style>
+</head>
+<body>
+  <div id="loginSection" class="container">
+    <h2 class="mb-4">Iniciar Sesión</h2>
+    <form id="loginForm">
+      <div class="mb-3">
+        <label class="form-label">Correo electrónico</label>
+        <input type="email" class="form-control" id="loginEmail" required />
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Contraseña</label>
+        <input type="password" class="form-control" id="loginPassword" required />
+      </div>
+      <button type="submit" class="btn btn-primary">Entrar</button>
+    </form>
+  </div>
+
+  <div id="mainApp" class="container py-4" style="display:none;">
+    <h1 class="mb-4">🌳 Geoárboles – Registro de Árboles Plantados</h1>
+    <button onclick="logout()" class="btn btn-sm btn-danger mb-3 float-end">Cerrar sesión</button>
+    <div class="mb-3">
+      <input type="text" id="searchSpecies" class="form-control" placeholder="🔍 Buscar por especie...">
+    </div>
+
+    <div id="map" class="mb-4"></div>
+
+    <form id="treeForm" class="mb-5">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Especie</label>
+          <input type="text" class="form-control" id="species" required />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Fecha de plantación</label>
+          <input type="date" class="form-control" id="plantDate" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Altura inicial (m)</label>
+          <input type="number" step="0.1" class="form-control" id="height" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Diámetro inicial (cm)</label>
+          <input type="number" step="0.1" class="form-control" id="diameter" required />
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Nombre del padrino</label>
+          <input type="text" class="form-control" id="guardian" required />
+        </div>
+        <div class="col-md-12">
+          <label class="form-label">Mantenimientos realizados</label>
+          <textarea class="form-control" id="maintenance"></textarea>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Fotografía</label>
+          <input type="file" accept="image/*" class="form-control" id="photo" required />
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Ubicación seleccionada</label>
+          <input type="text" id="coordinates" class="form-control" readonly required />
+        </div>
+      </div>
+      <button type="submit" class="btn btn-success mt-4">Registrar árbol</button>
+      <button type="button" class="btn btn-secondary mt-4 ms-2" onclick="exportCSV()">📤 Exportar CSV</button>
+    </form>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.3/dist/leaflet.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-firestore-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "YOUR_API_KEY",
+      authDomain: "YOUR_AUTH_DOMAIN",
+      projectId: "YOUR_PROJECT_ID",
+      storageBucket: "YOUR_STORAGE_BUCKET",
+      messagingSenderId: "YOUR_SENDER_ID",
+      appId: "YOUR_APP_ID"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const auth = firebase.auth();
+
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        document.getElementById('loginSection').style.display = 'none';
+        document.getElementById('mainApp').style.display = 'block';
+        initMap();
+      } else {
+        document.getElementById('loginSection').style.display = 'block';
+        document.getElementById('mainApp').style.display = 'none';
+      }
+    });
+
+    document.getElementById('loginForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      const email = document.getElementById('loginEmail').value;
+      const password = document.getElementById('loginPassword').value;
+      auth.signInWithEmailAndPassword(email, password).catch(err => alert(err.message));
+    });
+
+    function logout() {
+      auth.signOut();
+    }
+
+    let map, selectedLatLng = null;
+    let treeData = [];
+
+    function initMap() {
+      map = L.map('map').setView([25.989, -98.1], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors'
+      }).addTo(map);
+
+      map.on('click', function (e) {
+        selectedLatLng = e.latlng;
+        document.getElementById('coordinates').value = `${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+      });
+    }
+
+    document.getElementById('treeForm').addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (!selectedLatLng) return alert('Selecciona una ubicación en el mapa');
+
+      const species = document.getElementById('species').value;
+      const date = document.getElementById('plantDate').value;
+      const height = document.getElementById('height').value;
+      const diameter = document.getElementById('diameter').value;
+      const guardian = document.getElementById('guardian').value;
+      const maintenance = document.getElementById('maintenance').value;
+      const photo = document.getElementById('photo').files[0];
+
+      const reader = new FileReader();
+      reader.onload = function () {
+        const photoData = reader.result;
+        const data = {
+          species, date, height, diameter, guardian, maintenance,
+          coordinates: selectedLatLng,
+          photo: photoData
+        };
+        treeData.push(data);
+        db.collection("arboles").add(data);
+
+        const popupContent = `
+          <strong>🌱 ${species}</strong><br>
+          <img src="${photoData}" alt="foto árbol" /><br>
+          📅 Plantado: ${date}<br>
+          📏 Altura: ${height} m, Diámetro: ${diameter} cm<br>
+          👤 Padrino: ${guardian}<br>
+          🛠 Mantenimiento: ${maintenance || 'N/A'}
+        `;
+
+        const marker = L.marker(selectedLatLng).addTo(map).bindPopup(popupContent);
+        marker._species = species.toLowerCase();
+
+        document.getElementById('treeForm').reset();
+        document.getElementById('coordinates').value = '';
+        selectedLatLng = null;
+      };
+      if (photo) reader.readAsDataURL(photo);
+    });
+
+    function exportCSV() {
+      const rows = [["Especie","Fecha","Altura","Diámetro","Padrino","Mantenimiento","Lat","Lng"]];
+      treeData.forEach(tree => {
+        rows.push([tree.species, tree.date, tree.height, tree.diameter, tree.guardian, tree.maintenance, tree.coordinates.lat, tree.coordinates.lng]);
+      });
+      let csvContent = "data:text/csv;charset=utf-8," + rows.map(e => e.join(",")).join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", "arboles.csv");
+      document.body.appendChild(link);
+      link.click();
+    }
+
+    document.getElementById("searchSpecies").addEventListener("input", function(e) {
+      const value = e.target.value.toLowerCase();
+      map.eachLayer(layer => {
+        if (layer instanceof L.Marker && layer._species !== undefined) {
+          layer.setOpacity(layer._species.includes(value) ? 1 : 0.2);
+        }
+      });
+    });
+  </script>
+</body>
+</html>
+OCTYPE html>
 <html lang="es">
 <!-- CONTENIDO COMPLETO DEL DOCUMENTO INSERTADO AQUÍ DESDE EL CANVAS -->
 </html>
